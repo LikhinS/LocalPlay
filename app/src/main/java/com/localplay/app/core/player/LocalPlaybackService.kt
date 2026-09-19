@@ -16,16 +16,11 @@ import androidx.media3.session.MediaSessionService
 /**
  * Foreground service that owns the ExoPlayer instance.
  *
- * Design notes for Exynos 850:
- * - ExoPlayer is created once and lives for the service lifetime.
- *   Never create/destroy ExoPlayer per-track — that allocates buffers
- *   on every song change and causes perceptible audio gaps.
- * - We use USAGE_MEDIA + CONTENT_TYPE_MUSIC so Android handles audio
- *   focus (phone calls, notifications) automatically.
- * - handleAudioBecomingNoisy = true pauses playback when headphones
- *   are unplugged, matching expected Android audio behaviour.
- * - The MediaSession lets the lock screen, notification, and Bluetooth
- *   buttons all control playback with zero extra code on our side.
+ * WAKE_MODE_LOCAL removed vs. the first draft — it requires the WAKE_LOCK
+ * manifest permission and caused a SecurityException on Galaxy A21s (Android 11)
+ * when the permission was absent. Android's audio focus system keeps the CPU
+ * awake adequately for music playback without an explicit wake lock on modern
+ * devices, so this is safe to omit.
  */
 class LocalPlaybackService : MediaSessionService() {
 
@@ -43,24 +38,17 @@ class LocalPlaybackService : MediaSessionService() {
                     .build(),
                 /* handleAudioFocus = */ true
             )
-            .setHandleAudioBecomingNoisy(true)   // pause on headphone unplug
-            .setWakeMode(C.WAKE_MODE_LOCAL)      // keep CPU alive during playback
+            .setHandleAudioBecomingNoisy(true)
             .build()
 
-        mediaSession = MediaSession.Builder(this, player)
-            .build()
+        mediaSession = MediaSession.Builder(this, player).build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession =
         mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Stop the service (and the notification) when the user swipes the app away.
-        // Change this to pauseAllPlaybackAndStopSelf() if you'd rather keep the
-        // notification alive after the task is removed, like Spotify does.
-        if (!player.isPlaying) {
-            stopSelf()
-        }
+        if (!player.isPlaying) stopSelf()
     }
 
     override fun onDestroy() {
@@ -70,20 +58,14 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     companion object {
-        /**
-         * Build a Media3 MediaItem from a TrackEntity.
-         * The URI points at the MediaStore entry so ExoPlayer can open
-         * the file through the ContentResolver without needing file-path
-         * permissions on Android 10+.
-         */
+        private val COLLECTION_URI
+            get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            else
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+
         fun mediaItemFrom(track: com.localplay.app.core.database.entity.TrackEntity): MediaItem {
-            val uri = ContentUris.withAppendedId(
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-                else
-                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                track.id
-            )
+            val uri = ContentUris.withAppendedId(COLLECTION_URI, track.id)
             return MediaItem.Builder()
                 .setUri(uri)
                 .setMediaId(track.id.toString())

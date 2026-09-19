@@ -12,6 +12,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Required by ExoPlayer's WAKE_MODE_LOCAL so the CPU stays awake
+        during playback when the screen is off. Without this, ExoPlayer
+        throws a SecurityException the moment play() is called.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -26,11 +33,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-            Media3 MediaSessionService for background playback.
-            exported=true is required so the system media controls and
-            Bluetooth buttons can reach the session from outside our process.
-        -->
         <service
             android:name=".core.player.LocalPlaybackService"
             android:exported="true"

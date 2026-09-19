@@ -24,17 +24,11 @@ import kotlinx.coroutines.launch
  * UI-facing wrapper around the MediaController that connects to
  * [LocalPlaybackService].
  *
- * Key design decisions:
- * - MediaController is the client-side proxy for the player running in the
- *   service process. We build it once and reuse it — creating a new
- *   MediaController per screen/ViewModel is wasteful.
- * - Position is polled on a 500 ms ticker rather than using a continuous
- *   animation loop, keeping the CPU idle between ticks. On Exynos 850 this
- *   matters — a per-frame position poll would keep one core busy at 60 Hz
- *   for no visible improvement in scrubber smoothness.
- * - PlayerState is a single immutable snapshot so Compose only recomposes
- *   widgets whose inputs actually changed (e.g. the scrubber recomposes on
- *   position ticks; the artwork doesn't).
+ * Connection race fix: commands that arrive before the MediaController
+ * finishes its async build are stored as a [pendingCommand] lambda and
+ * replayed immediately once the controller is ready. This prevents the
+ * crash that occurred when the user tapped a track before buildAsync()
+ * completed (controller was null → NPE in playQueue).
  */
 class PlayerRepository(context: Context) {
 
@@ -44,13 +38,15 @@ class PlayerRepository(context: Context) {
     private val _state = MutableStateFlow(PlayerState())
     val state: StateFlow<PlayerState> = _state.asStateFlow()
 
-    // In-memory queue — the source of truth for what's playing and what's next.
     private val _queue = mutableListOf<TrackEntity>()
     private var _queueIndex = 0
 
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var positionTickJob: Job? = null
+
+    // Stores the last command that arrived before the controller was ready
+    private var pendingCommand: (() -> Unit)? = null
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -61,9 +57,17 @@ class PlayerRepository(context: Context) {
         )
         controllerFuture = MediaController.Builder(appContext, sessionToken).buildAsync()
         controllerFuture?.addListener({
-            controller = controllerFuture?.get()
-            controller?.addListener(playerListener)
-            startPositionTicker()
+            try {
+                controller = controllerFuture?.get()
+                controller?.addListener(playerListener)
+                startPositionTicker()
+                // Replay any command that arrived during the async build
+                pendingCommand?.invoke()
+                pendingCommand = null
+            } catch (e: Exception) {
+                // Controller build failed — surface in state so UI can react
+                _state.value = _state.value.copy(currentTrack = null, isPlaying = false)
+            }
         }, MoreExecutors.directExecutor())
     }
 
@@ -76,12 +80,13 @@ class PlayerRepository(context: Context) {
 
     // ── Commands ──────────────────────────────────────────────────────────
 
-    /**
-     * Replace the queue with [tracks], jump to [startIndex], and play.
-     * Called when the user taps a track in the library.
-     */
     fun playQueue(tracks: List<TrackEntity>, startIndex: Int = 0) {
-        val ctrl = controller ?: return
+        if (controller == null) {
+            // Controller not ready yet — store the command and replay on connect
+            pendingCommand = { playQueue(tracks, startIndex) }
+            return
+        }
+        val ctrl = controller!!
         _queue.clear()
         _queue.addAll(tracks)
         _queueIndex = startIndex.coerceIn(0, tracks.lastIndex)
@@ -107,13 +112,9 @@ class PlayerRepository(context: Context) {
     }
 
     fun skipToPrevious() {
-        // If more than 3 seconds in, restart the track; otherwise go back.
         val ctrl = controller ?: return
-        if ((ctrl.currentPosition) > 3_000L) {
-            ctrl.seekTo(0L)
-        } else {
-            ctrl.seekToPreviousMediaItem()
-        }
+        if (ctrl.currentPosition > 3_000L) ctrl.seekTo(0L)
+        else ctrl.seekToPreviousMediaItem()
     }
 
     fun setShuffleEnabled(enabled: Boolean) {
@@ -132,8 +133,7 @@ class PlayerRepository(context: Context) {
 
     fun playNext(track: TrackEntity) {
         val ctrl = controller ?: return
-        val insertAt = (ctrl.currentMediaItemIndex + 1)
-            .coerceAtMost(ctrl.mediaItemCount)
+        val insertAt = (ctrl.currentMediaItemIndex + 1).coerceAtMost(ctrl.mediaItemCount)
         ctrl.addMediaItem(insertAt, LocalPlaybackService.mediaItemFrom(track))
         _queue.add(insertAt.coerceAtMost(_queue.size), track)
         pushState()
@@ -149,7 +149,10 @@ class PlayerRepository(context: Context) {
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) = pushState()
-        override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+        override fun onMediaItemTransition(
+            mediaItem: androidx.media3.common.MediaItem?,
+            reason: Int
+        ) {
             _queueIndex = controller?.currentMediaItemIndex ?: 0
             pushState()
         }
@@ -158,17 +161,11 @@ class PlayerRepository(context: Context) {
         override fun onPlaybackStateChanged(playbackState: Int) = pushState()
     }
 
-    /**
-     * Poll position every 500 ms while playing.
-     * Pausing the ticker when not playing saves CPU cycles on Exynos 850.
-     */
     private fun startPositionTicker() {
         positionTickJob?.cancel()
         positionTickJob = scope.launch {
             while (true) {
-                if (controller?.isPlaying == true) {
-                    pushState()
-                }
+                if (controller?.isPlaying == true) pushState()
                 delay(500L)
             }
         }
@@ -180,19 +177,20 @@ class PlayerRepository(context: Context) {
             _queue[_queueIndex] else null
 
         _state.value = PlayerState(
-            currentTrack    = currentTrack,
-            isPlaying       = ctrl?.isPlaying ?: false,
-            positionMs      = ctrl?.currentPosition ?: 0L,
-            durationMs      = currentTrack?.durationMs ?: (ctrl?.duration?.takeIf { it > 0 } ?: 0L),
-            shuffleEnabled  = ctrl?.shuffleModeEnabled ?: false,
-            repeatMode      = when (ctrl?.repeatMode) {
+            currentTrack   = currentTrack,
+            isPlaying      = ctrl?.isPlaying ?: false,
+            positionMs     = ctrl?.currentPosition ?: 0L,
+            durationMs     = currentTrack?.durationMs
+                ?: (ctrl?.duration?.takeIf { it > 0 } ?: 0L),
+            shuffleEnabled = ctrl?.shuffleModeEnabled ?: false,
+            repeatMode     = when (ctrl?.repeatMode) {
                 Player.REPEAT_MODE_ONE -> RepeatMode.ONE
                 Player.REPEAT_MODE_ALL -> RepeatMode.ALL
                 else                   -> RepeatMode.OFF
             },
-            queue           = _queue.toList(),
-            queueIndex      = _queueIndex,
-            isCrossfading   = false   // wired up in Phase 6
+            queue          = _queue.toList(),
+            queueIndex     = _queueIndex,
+            isCrossfading  = false
         )
     }
 }
