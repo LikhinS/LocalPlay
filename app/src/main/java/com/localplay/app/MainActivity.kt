@@ -1,5 +1,4 @@
 package com.localplay.app
-
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,82 +17,56 @@ import com.localplay.app.feature.artists.ArtistsScreen
 import com.localplay.app.feature.home.HomeScreen
 import com.localplay.app.feature.library.LibraryViewModel
 import com.localplay.app.feature.nowplaying.NowPlayingScreen
-import com.localplay.app.feature.permissions.PermissionScreen
-import com.localplay.app.feature.permissions.rememberAudioPermissionState
+import com.localplay.app.feature.permissions.*
 import com.localplay.app.feature.search.SearchScreen
 import com.localplay.app.feature.songs.SongsScreen
 import com.localplay.app.ui.components.MiniPlayer
 import com.localplay.app.ui.theme.LocalPlayTheme
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent { LocalPlayApp() }
-    }
+    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { LocalPlayApp() } }
 }
 
-private enum class Tab(val label: String, val icon: ImageVector) {
-    HOME    ("Home",    Icons.Filled.Home),
-    SONGS   ("Songs",  Icons.Filled.MusicNote),
-    ALBUMS  ("Albums", Icons.Filled.Album),
-    ARTISTS ("Artists",Icons.Filled.Person),
-    SEARCH  ("Search", Icons.Filled.Search)
+private enum class Tab(val label:String, val icon:ImageVector) {
+    HOME("Home",Icons.Filled.Home), SONGS("Songs",Icons.Filled.MusicNote),
+    ALBUMS("Albums",Icons.Filled.Album), ARTISTS("Artists",Icons.Filled.Person),
+    SEARCH("Search",Icons.Filled.Search)
 }
 
-@Composable
-fun LocalPlayApp() {
+@Composable fun LocalPlayApp() {
     LocalPlayTheme {
-        val permissionGranted = rememberAudioPermissionState()
-        if (!permissionGranted.value) {
-            PermissionScreen(onPermissionGranted = { permissionGranted.value = true })
-            return@LocalPlayTheme
-        }
+        val perm = rememberAudioPermissionState()
+        if (!perm.value) { PermissionScreen(onPermissionGranted={perm.value=true}); return@LocalPlayTheme }
 
-        val libraryViewModel: LibraryViewModel = viewModel()
-        val playerViewModel: PlayerViewModel   = viewModel()
+        val lib: LibraryViewModel = viewModel()
+        val player: PlayerViewModel = viewModel()
+        LaunchedEffect(Unit) { lib.scanLibrary() }
 
-        LaunchedEffect(Unit) { libraryViewModel.scanLibrary() }
+        var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+        var showNP by remember { mutableStateOf(false) }
+        val ps by player.playerState.collectAsState()
 
-        var selectedTab    by rememberSaveable { mutableStateOf(Tab.HOME) }
-        var showNowPlaying by remember        { mutableStateOf(false) }
-        val playerState    by playerViewModel.playerState.collectAsState()
+        if (showNP) { NowPlayingScreen(player, onDismiss={showNP=false}); return@LocalPlayTheme }
 
-        if (showNowPlaying) {
-            NowPlayingScreen(playerViewModel = playerViewModel,
-                onDismiss = { showNowPlaying = false })
-            return@LocalPlayTheme
-        }
-
-        Scaffold(
-            bottomBar = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    MiniPlayer(
-                        state          = playerState,
-                        onExpand       = { showNowPlaying = true },
-                        onPlayPause    = { playerViewModel.playOrPause() },
-                        onSkipNext     = { playerViewModel.skipToNext() },
-                        onSkipPrevious = { playerViewModel.skipToPrevious() }
-                    )
-                    NavigationBar {
-                        Tab.entries.forEach { tab ->
-                            NavigationBarItem(
-                                selected = selectedTab == tab,
-                                onClick  = { selectedTab = tab },
-                                icon     = { Icon(tab.icon, contentDescription = tab.label) },
-                                label    = { Text(tab.label) }
-                            )
-                        }
+        Scaffold(bottomBar={
+            Column(modifier=Modifier.fillMaxWidth()) {
+                MiniPlayer(ps, onExpand={showNP=true}, onPlayPause={player.playOrPause()},
+                    onSkipNext={player.skipToNext()}, onSkipPrevious={player.skipToPrevious()})
+                NavigationBar {
+                    Tab.entries.forEach { t ->
+                        NavigationBarItem(selected=tab==t, onClick={tab=t},
+                            icon={Icon(t.icon,t.label)}, label={Text(t.label)})
                     }
                 }
             }
-        ) { innerPadding ->
-            Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                when (selectedTab) {
-                    Tab.HOME    -> HomeScreen(libraryViewModel, playerViewModel)
-                    Tab.SONGS   -> SongsScreen(libraryViewModel, playerViewModel)
-                    Tab.ALBUMS  -> AlbumsScreen(libraryViewModel, playerViewModel)
-                    Tab.ARTISTS -> ArtistsScreen(libraryViewModel, playerViewModel)
-                    Tab.SEARCH  -> SearchScreen(libraryViewModel, playerViewModel)
+        }) { padding ->
+            Box(modifier=Modifier.fillMaxSize().padding(padding)) {
+                when(tab) {
+                    Tab.HOME    -> HomeScreen(lib,player)
+                    Tab.SONGS   -> SongsScreen(lib,player)
+                    Tab.ALBUMS  -> AlbumsScreen(lib,player)
+                    Tab.ARTISTS -> ArtistsScreen(lib,player)
+                    Tab.SEARCH  -> SearchScreen(lib,player)
                 }
             }
         }

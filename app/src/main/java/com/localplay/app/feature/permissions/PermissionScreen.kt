@@ -1,5 +1,4 @@
 package com.localplay.app.feature.permissions
-
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -13,40 +12,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-
-val audioPermission: String =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.READ_MEDIA_AUDIO
-    else Manifest.permission.READ_EXTERNAL_STORAGE
-
-@Composable
-fun rememberAudioPermissionState(): MutableState<Boolean> {
+val audioPermission: String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+@Composable fun rememberAudioPermissionState(): MutableState<Boolean> {
     val context = LocalContext.current
-    return remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED)
-    }
+    return remember { mutableStateOf(ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED) }
 }
-
-@Composable
-fun PermissionScreen(onPermissionGranted: () -> Unit) {
-    var wasDenied by remember { mutableStateOf(false) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) onPermissionGranted() else wasDenied = true
-    }
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center) {
-            Text("LocalPlay needs access to your music", style = MaterialTheme.typography.headlineSmall)
+@Composable fun PermissionScreen(onPermissionGranted: () -> Unit) {
+    var denied by remember { mutableStateOf(false) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if(it) onPermissionGranted() else denied=true }
+    Surface(modifier=Modifier.fillMaxSize()) {
+        Column(modifier=Modifier.fillMaxSize().padding(32.dp), horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.Center) {
+            Text("LocalPlay needs access to your music", style=MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(12.dp))
-            Text("This only reads audio files stored on your device. No internet permission is used.",
-                style = MaterialTheme.typography.bodyMedium)
+            Text("Reads only local audio files. No internet permission is used.", style=MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(24.dp))
-            Button(onClick = { launcher.launch(audioPermission) }) { Text("Grant access") }
-            if (wasDenied) {
-                Spacer(Modifier.height(16.dp))
-                Text("Grant it later from Settings > Apps > LocalPlay > Permissions.",
-                    style = MaterialTheme.typography.bodySmall)
-            }
+            Button(onClick={launcher.launch(audioPermission)}) { Text("Grant access") }
+            if (denied) { Spacer(Modifier.height(16.dp)); Text("Grant later via Settings > Apps > LocalPlay > Permissions.", style=MaterialTheme.typography.bodySmall) }
         }
     }
 }

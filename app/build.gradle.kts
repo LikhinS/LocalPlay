@@ -8,38 +8,26 @@ plugins {
 android {
     namespace = "com.localplay.app"
     compileSdk = 34
-
     defaultConfig {
         applicationId = "com.localplay.app"
-        minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "0.4.0"
+        minSdk = 26; targetSdk = 34
+        versionCode = 1; versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-
     configurations.all {
-        resolutionStrategy {
-            force("com.google.guava:guava:33.3.1-android")
-        }
+        resolutionStrategy { force("com.google.guava:guava:33.3.1-android") }
     }
 }
 
@@ -52,24 +40,19 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
     implementation("com.google.guava:guava:33.3.1-android")
-
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
-
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
-
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
@@ -78,5 +61,4 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
-
 kapt { correctErrorTypes = true }
