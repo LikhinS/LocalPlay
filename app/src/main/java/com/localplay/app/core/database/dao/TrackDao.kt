@@ -4,44 +4,19 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Update
 import com.localplay.app.core.database.entity.TrackEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TrackDao {
-
-    // ── Writes ───────────────────────────────────────────────────────────
-
-    /**
-     * Upsert a batch of tracks in one transaction.
-     * OnConflictStrategy.REPLACE means re-scanned files update their metadata
-     * in-place without losing playCount or lastPlayedAt (Room merges the row).
-     *
-     * Always call this from a background dispatcher — never the main thread.
-     * The scanner calls it once with the full list so SQLite does one fsync
-     * rather than N, keeping scan time acceptable on eMMC storage.
-     */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(tracks: List<TrackEntity>)
 
-    /**
-     * Remove tracks whose IDs are no longer in MediaStore
-     * (i.e. files that were deleted since the last scan).
-     */
     @Query("DELETE FROM tracks WHERE id NOT IN (:currentIds)")
     suspend fun deleteStale(currentIds: List<Long>)
 
-    /** Bump play count and timestamp after a track finishes playing. */
-    @Query("""
-        UPDATE tracks
-        SET playCount = playCount + 1,
-            lastPlayedAt = :nowMillis
-        WHERE id = :trackId
-    """)
+    @Query("UPDATE tracks SET playCount = playCount + 1, lastPlayedAt = :nowMillis WHERE id = :trackId")
     suspend fun recordPlay(trackId: Long, nowMillis: Long)
-
-    // ── Reads (Flow so the UI reacts automatically to scan completion) ───
 
     @Query("SELECT * FROM tracks ORDER BY title ASC")
     fun observeAllByTitle(): Flow<List<TrackEntity>>
@@ -61,14 +36,7 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE artist = :artist ORDER BY album ASC, trackNumber ASC")
     fun observeArtistTracks(artist: String): Flow<List<TrackEntity>>
 
-    @Query("""
-        SELECT * FROM tracks
-        WHERE title LIKE '%' || :query || '%'
-           OR artist LIKE '%' || :query || '%'
-           OR album LIKE '%' || :query || '%'
-        ORDER BY title ASC
-        LIMIT 100
-    """)
+    @Query("SELECT * FROM tracks WHERE title LIKE '%' || :query || '%' OR artist LIKE '%' || :query || '%' OR album LIKE '%' || :query || '%' ORDER BY title ASC LIMIT 100")
     fun search(query: String): Flow<List<TrackEntity>>
 
     @Query("SELECT COUNT(*) FROM tracks")
@@ -76,12 +44,6 @@ interface TrackDao {
 
     @Query("SELECT id FROM tracks")
     suspend fun getAllIds(): List<Long>
-
-    @Query("SELECT DISTINCT album FROM tracks ORDER BY album ASC")
-    fun observeAlbums(): Flow<List<String>>
-
-    @Query("SELECT DISTINCT artist FROM tracks ORDER BY artist ASC")
-    fun observeArtists(): Flow<List<String>>
 
     @Query("SELECT * FROM tracks WHERE id = :id")
     suspend fun getById(id: Long): TrackEntity?

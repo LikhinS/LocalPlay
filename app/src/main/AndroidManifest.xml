@@ -1,22 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Local audio access -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-
-    <!-- Background playback -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!--
-        Required by ExoPlayer's WAKE_MODE_LOCAL so the CPU stays awake
-        during playback when the screen is off. Without this, ExoPlayer
-        throws a SecurityException the moment play() is called.
-    -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
@@ -43,5 +34,4 @@
         </service>
 
     </application>
-
 </manifest>

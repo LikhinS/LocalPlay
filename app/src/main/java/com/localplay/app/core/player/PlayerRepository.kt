@@ -20,18 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-/**
- * UI-facing wrapper around the MediaController that connects to
- * [LocalPlaybackService].
- *
- * Connection race fix: commands that arrive before the MediaController
- * finishes its async build are stored as a [pendingCommand] lambda and
- * replayed immediately once the controller is ready. This prevents the
- * crash that occurred when the user tapped a track before buildAsync()
- * completed (controller was null → NPE in playQueue).
- */
 class PlayerRepository(context: Context) {
-
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -40,32 +29,22 @@ class PlayerRepository(context: Context) {
 
     private val _queue = mutableListOf<TrackEntity>()
     private var _queueIndex = 0
-
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var positionTickJob: Job? = null
-
-    // Stores the last command that arrived before the controller was ready
     private var pendingCommand: (() -> Unit)? = null
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────
-
     fun connect() {
-        val sessionToken = SessionToken(
-            appContext,
-            ComponentName(appContext, LocalPlaybackService::class.java)
-        )
-        controllerFuture = MediaController.Builder(appContext, sessionToken).buildAsync()
+        val token = SessionToken(appContext, ComponentName(appContext, LocalPlaybackService::class.java))
+        controllerFuture = MediaController.Builder(appContext, token).buildAsync()
         controllerFuture?.addListener({
             try {
                 controller = controllerFuture?.get()
                 controller?.addListener(playerListener)
                 startPositionTicker()
-                // Replay any command that arrived during the async build
                 pendingCommand?.invoke()
                 pendingCommand = null
             } catch (e: Exception) {
-                // Controller build failed — surface in state so UI can react
                 _state.value = _state.value.copy(currentTrack = null, isPlaying = false)
             }
         }, MoreExecutors.directExecutor())
@@ -78,119 +57,73 @@ class PlayerRepository(context: Context) {
         controller = null
     }
 
-    // ── Commands ──────────────────────────────────────────────────────────
-
     fun playQueue(tracks: List<TrackEntity>, startIndex: Int = 0) {
-        if (controller == null) {
-            // Controller not ready yet — store the command and replay on connect
-            pendingCommand = { playQueue(tracks, startIndex) }
-            return
-        }
+        if (controller == null) { pendingCommand = { playQueue(tracks, startIndex) }; return }
         val ctrl = controller!!
-        _queue.clear()
-        _queue.addAll(tracks)
+        _queue.clear(); _queue.addAll(tracks)
         _queueIndex = startIndex.coerceIn(0, tracks.lastIndex)
-
-        val mediaItems = tracks.map { LocalPlaybackService.mediaItemFrom(it) }
-        ctrl.setMediaItems(mediaItems, _queueIndex, 0L)
-        ctrl.prepare()
-        ctrl.play()
-        pushState()
+        ctrl.setMediaItems(tracks.map { LocalPlaybackService.mediaItemFrom(it) }, _queueIndex, 0L)
+        ctrl.prepare(); ctrl.play(); pushState()
     }
 
-    fun playOrPause() {
-        val ctrl = controller ?: return
-        if (ctrl.isPlaying) ctrl.pause() else ctrl.play()
-    }
-
-    fun seekTo(positionMs: Long) {
-        controller?.seekTo(positionMs)
-    }
-
-    fun skipToNext() {
-        controller?.seekToNextMediaItem()
-    }
-
+    fun playOrPause() { val c = controller ?: return; if (c.isPlaying) c.pause() else c.play() }
+    fun seekTo(ms: Long) { controller?.seekTo(ms) }
+    fun skipToNext() { controller?.seekToNextMediaItem() }
     fun skipToPrevious() {
-        val ctrl = controller ?: return
-        if (ctrl.currentPosition > 3_000L) ctrl.seekTo(0L)
-        else ctrl.seekToPreviousMediaItem()
+        val c = controller ?: return
+        if (c.currentPosition > 3_000L) c.seekTo(0L) else c.seekToPreviousMediaItem()
     }
-
-    fun setShuffleEnabled(enabled: Boolean) {
-        controller?.shuffleModeEnabled = enabled
-        pushState()
-    }
-
+    fun setShuffleEnabled(on: Boolean) { controller?.shuffleModeEnabled = on; pushState() }
     fun setRepeatMode(mode: RepeatMode) {
-        controller?.repeatMode = when (mode) {
+        controller?.repeatMode = when(mode) {
             RepeatMode.OFF -> Player.REPEAT_MODE_OFF
             RepeatMode.ALL -> Player.REPEAT_MODE_ALL
             RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-        }
-        pushState()
+        }; pushState()
     }
-
     fun playNext(track: TrackEntity) {
-        val ctrl = controller ?: return
-        val insertAt = (ctrl.currentMediaItemIndex + 1).coerceAtMost(ctrl.mediaItemCount)
-        ctrl.addMediaItem(insertAt, LocalPlaybackService.mediaItemFrom(track))
-        _queue.add(insertAt.coerceAtMost(_queue.size), track)
-        pushState()
+        val c = controller ?: return
+        val at = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
+        c.addMediaItem(at, LocalPlaybackService.mediaItemFrom(track))
+        _queue.add(at.coerceAtMost(_queue.size), track); pushState()
     }
-
     fun addToQueue(track: TrackEntity) {
         controller?.addMediaItem(LocalPlaybackService.mediaItemFrom(track))
-        _queue.add(track)
-        pushState()
+        _queue.add(track); pushState()
     }
-
-    // ── Internal ──────────────────────────────────────────────────────────
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) = pushState()
-        override fun onMediaItemTransition(
-            mediaItem: androidx.media3.common.MediaItem?,
-            reason: Int
-        ) {
-            _queueIndex = controller?.currentMediaItemIndex ?: 0
-            pushState()
+        override fun onMediaItemTransition(item: androidx.media3.common.MediaItem?, reason: Int) {
+            _queueIndex = controller?.currentMediaItemIndex ?: 0; pushState()
         }
-        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = pushState()
+        override fun onShuffleModeEnabledChanged(enabled: Boolean) = pushState()
         override fun onRepeatModeChanged(repeatMode: Int) = pushState()
-        override fun onPlaybackStateChanged(playbackState: Int) = pushState()
+        override fun onPlaybackStateChanged(state: Int) = pushState()
     }
 
     private fun startPositionTicker() {
         positionTickJob?.cancel()
         positionTickJob = scope.launch {
-            while (true) {
-                if (controller?.isPlaying == true) pushState()
-                delay(500L)
-            }
+            while (true) { if (controller?.isPlaying == true) pushState(); delay(500L) }
         }
     }
 
     private fun pushState() {
         val ctrl = controller
-        val currentTrack = if (_queue.isNotEmpty() && _queueIndex in _queue.indices)
-            _queue[_queueIndex] else null
-
+        val track = if (_queue.isNotEmpty() && _queueIndex in _queue.indices) _queue[_queueIndex] else null
         _state.value = PlayerState(
-            currentTrack   = currentTrack,
+            currentTrack   = track,
             isPlaying      = ctrl?.isPlaying ?: false,
             positionMs     = ctrl?.currentPosition ?: 0L,
-            durationMs     = currentTrack?.durationMs
-                ?: (ctrl?.duration?.takeIf { it > 0 } ?: 0L),
+            durationMs     = track?.durationMs ?: (ctrl?.duration?.takeIf { it > 0 } ?: 0L),
             shuffleEnabled = ctrl?.shuffleModeEnabled ?: false,
-            repeatMode     = when (ctrl?.repeatMode) {
+            repeatMode     = when(ctrl?.repeatMode) {
                 Player.REPEAT_MODE_ONE -> RepeatMode.ONE
                 Player.REPEAT_MODE_ALL -> RepeatMode.ALL
-                else                   -> RepeatMode.OFF
+                else -> RepeatMode.OFF
             },
-            queue          = _queue.toList(),
-            queueIndex     = _queueIndex,
-            isCrossfading  = false
+            queue = _queue.toList(), queueIndex = _queueIndex, isCrossfading = false
         )
     }
 }
