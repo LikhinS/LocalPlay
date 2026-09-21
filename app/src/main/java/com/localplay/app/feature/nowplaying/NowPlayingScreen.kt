@@ -48,13 +48,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.localplay.app.core.player.PlayerViewModel
 import com.localplay.app.core.player.model.RepeatMode
 import com.localplay.app.ui.components.AlbumArt
 import com.localplay.app.ui.components.FormatBadgeRow
+import com.localplay.app.ui.components.MarqueeText
 import com.localplay.app.ui.components.formatDuration
 
 @Composable
@@ -70,9 +70,9 @@ fun NowPlayingScreen(
     val dragFraction = (dragOffsetY / dismissThreshold).coerceIn(0f, 1f)
 
     val artScale by animateFloatAsState(
-        targetValue    = 1f - dragFraction * 0.08f,
-        animationSpec  = tween(0),
-        label          = "artScale"
+        targetValue   = 1f - dragFraction * 0.08f,
+        animationSpec = tween(0),
+        label         = "artScale"
     )
     val screenAlpha by animateFloatAsState(
         targetValue   = 1f - dragFraction * 0.4f,
@@ -100,9 +100,7 @@ fun NowPlayingScreen(
             }
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 28.dp),
+            modifier            = Modifier.fillMaxSize().padding(horizontal = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(12.dp))
@@ -119,10 +117,10 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Header row
+            // Header
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                modifier              = Modifier.fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 IconButton(onClick = onDismiss) {
@@ -140,38 +138,38 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Album art — scales with drag gesture
+            // Album art
             AlbumArt(
                 albumId    = track?.albumId,
                 sizeDp     = 300.dp,
                 cornerDp   = 12.dp,
                 showShadow = true,
-                modifier   = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .scale(artScale)
+                modifier   = Modifier.fillMaxWidth().aspectRatio(1f).scale(artScale)
             )
 
             Spacer(Modifier.height(28.dp))
 
-            Text(
-                track?.title ?: "Not playing",
-                style     = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis,
-                modifier  = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                track?.artist ?: "",
-                style     = MaterialTheme.typography.bodyMedium,
-                color     = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center,
-                maxLines  = 1,
-                modifier  = Modifier.fillMaxWidth()
+            // Title — marquee scrolls if too long
+            MarqueeText(
+                text  = track?.title ?: "Not playing",
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    textAlign = TextAlign.Center
+                ),
+                modifier = Modifier.fillMaxWidth()
             )
 
+            Spacer(Modifier.height(4.dp))
+
+            // Artist — marquee scrolls if too long
+            MarqueeText(
+                text  = track?.artist ?: "",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.primary
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Format badge — one at a time, crossfades between states
             if (track != null) {
                 Spacer(Modifier.height(8.dp))
                 FormatBadgeRow(
@@ -184,6 +182,7 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(20.dp))
 
+            // Scrubber
             if (state.durationMs > 0) {
                 Slider(
                     value         = state.progress,
@@ -209,6 +208,7 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(16.dp))
 
+            // Transport controls
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,

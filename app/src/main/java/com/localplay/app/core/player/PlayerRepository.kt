@@ -2,6 +2,8 @@ package com.localplay.app.core.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.ServiceConnection
+import android.os.IBinder
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -23,12 +25,11 @@ import kotlinx.coroutines.launch
 class PlayerRepository(context: Context) {
 
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope      = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val _state = MutableStateFlow(PlayerState())
     val state: StateFlow<PlayerState> = _state.asStateFlow()
 
-    // Crossfade config — updated from the Settings screen (Phase 9)
     private val _crossfadeConfig = MutableStateFlow(CrossfadeConfig())
     val crossfadeConfig: StateFlow<CrossfadeConfig> = _crossfadeConfig.asStateFlow()
 
@@ -40,9 +41,10 @@ class PlayerRepository(context: Context) {
     private var positionTickJob: Job? = null
     private var pendingCommand: (() -> Unit)? = null
 
-    // Crossfade state tracking
-    private var crossfadeJob: Job? = null
+    // Crossfade runtime state
+    private var crossfadeRampJob: Job? = null
     private var isCrossfading = false
+    private var crossfadeTriggered = false   // guard: trigger fade only once per track end
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -67,7 +69,7 @@ class PlayerRepository(context: Context) {
 
     fun disconnect() {
         positionTickJob?.cancel()
-        crossfadeJob?.cancel()
+        crossfadeRampJob?.cancel()
         controller?.removeListener(playerListener)
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null
@@ -105,21 +107,25 @@ class PlayerRepository(context: Context) {
         controller?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
-    fun seekTo(ms: Long) { controller?.seekTo(ms) }
+    fun seekTo(ms: Long) {
+        resetCrossfadeState()
+        controller?.seekTo(ms)
+    }
 
-    fun skipToNext() { controller?.seekToNextMediaItem() }
+    fun skipToNext() {
+        resetCrossfadeState()
+        controller?.seekToNextMediaItem()
+    }
 
     fun skipToPrevious() {
+        resetCrossfadeState()
         controller?.let {
             if (it.currentPosition > 3_000L) it.seekTo(0L)
             else it.seekToPreviousMediaItem()
         }
     }
 
-    fun setShuffleEnabled(on: Boolean) {
-        controller?.shuffleModeEnabled = on
-        pushState()
-    }
+    fun setShuffleEnabled(on: Boolean) { controller?.shuffleModeEnabled = on; pushState() }
 
     fun setRepeatMode(mode: RepeatMode) {
         controller?.repeatMode = when (mode) {
@@ -144,44 +150,52 @@ class PlayerRepository(context: Context) {
         pushState()
     }
 
-    // ── Crossfade logic ───────────────────────────────────────────────────
+    // ── Crossfade ─────────────────────────────────────────────────────────
 
     /**
-     * Called every 500 ms from the position ticker.
-     * When crossfade is enabled, we check how close we are to the end
-     * of the current track:
+     * Called every 500 ms from the position ticker while a track is playing.
      *
-     * - At (duration - crossfadeDuration - leadMs) we show "Mixing"
-     * - At (duration - crossfadeDuration) we trigger the next track
-     *   and ExoPlayer's built-in clip transition handles the overlap.
+     * Timeline (example: 5s crossfade, 1.5s lead):
      *
-     * We use ExoPlayer's setSeekParameters + crossfade via volume ramp
-     * on the player level. ExoPlayer's ClippingMediaSource / AudioProcessor
-     * approach requires media transformer setup — for this phase we use
-     * the simpler approach: signal the transition early and let the
-     * MediaSession gapless transition do the work, while we only manage
-     * the "Mixing" badge timing.
+     *   T-6.5s  show "Mixing" badge (lead window starts)
+     *   T-5.0s  begin volume ramp: fade out current track over 5s,
+     *           skip to next track + fade in over 5s
+     *   T-0.0s  track ends naturally — ExoPlayer auto-advances
      *
-     * True dual-player volume crossfade is a Phase 9 polish item.
-     * This phase wires the badge correctly.
+     * The volume ramp runs as a coroutine updating ExoPlayer.volume every
+     * 50 ms — 100 steps over the fade duration. This is lighter than an
+     * AudioProcessor and doesn't require MediaTransformer setup.
+     *
+     * After the ramp completes we reset volume to 1.0 so the next track
+     * plays at full volume.
      */
     private fun checkCrossfadeTiming(positionMs: Long, durationMs: Long) {
         val config = _crossfadeConfig.value
         if (!config.isEnabled || durationMs <= 0L) return
 
         val timeRemaining = durationMs - positionMs
-        val fadeStartAt   = config.crossfadeDurationMs + config.mixingLabelLeadMs
+        val leadWindowStart = config.crossfadeDurationMs + config.mixingLabelLeadMs
 
         when {
-            // Show "Mixing" badge in the lead window before the fade
-            timeRemaining <= fadeStartAt && timeRemaining > config.crossfadeDurationMs -> {
+            // Show badge in the lead window
+            timeRemaining in config.crossfadeDurationMs..leadWindowStart -> {
                 if (!isCrossfading) {
                     isCrossfading = true
                     pushState()
                 }
             }
-            // Past the fade point — clear the badge
-            timeRemaining <= 0L || timeRemaining > fadeStartAt -> {
+
+            // Trigger the volume ramp at the fade point (only once)
+            timeRemaining in 0L until config.crossfadeDurationMs -> {
+                if (!isCrossfading) { isCrossfading = true; pushState() }
+                if (!crossfadeTriggered) {
+                    crossfadeTriggered = true
+                    triggerVolumeCrossfade(config.crossfadeDurationMs)
+                }
+            }
+
+            // Outside any crossfade window — clear badge if it was showing
+            else -> {
                 if (isCrossfading) {
                     isCrossfading = false
                     pushState()
@@ -190,9 +204,56 @@ class PlayerRepository(context: Context) {
         }
     }
 
+    /**
+     * Ramps the current track's volume from 1.0 → 0.0 over [fadeDurationMs],
+     * seeks to the next track at the midpoint, then ramps 0.0 → 1.0.
+     *
+     * Uses 50 ms ticks (20 updates/s) — imperceptible on 60 Hz and very
+     * light on Exynos 850 (one float write per tick to ExoPlayer's mixer).
+     */
+    private fun triggerVolumeCrossfade(fadeDurationMs: Long) {
+        crossfadeRampJob?.cancel()
+        crossfadeRampJob = scope.launch {
+            val c = controller ?: return@launch
+            val steps      = (fadeDurationMs / 50L).coerceAtLeast(1L)
+            val stepDelay  = fadeDurationMs / steps
+
+            // Fade out
+            for (i in 0..steps) {
+                val vol = 1f - (i.toFloat() / steps.toFloat())
+                c.volume = vol.coerceIn(0f, 1f)
+                delay(stepDelay)
+            }
+            c.volume = 0f
+
+            // Advance to the next track while silent
+            if (c.hasNextMediaItem()) {
+                c.seekToNextMediaItem()
+                c.prepare()
+                c.play()
+            }
+
+            // Fade in
+            for (i in 0..steps) {
+                val vol = i.toFloat() / steps.toFloat()
+                c.volume = vol.coerceIn(0f, 1f)
+                delay(stepDelay)
+            }
+            c.volume = 1f
+
+            // Clear mixing badge after fade completes
+            isCrossfading = false
+            crossfadeTriggered = false
+            pushState()
+        }
+    }
+
     private fun resetCrossfadeState() {
-        crossfadeJob?.cancel()
-        isCrossfading = false
+        crossfadeRampJob?.cancel()
+        isCrossfading      = false
+        crossfadeTriggered = false
+        controller?.volume = 1f   // restore full volume if interrupted mid-fade
+        pushState()
     }
 
     // ── Internal ──────────────────────────────────────────────────────────
@@ -204,12 +265,13 @@ class PlayerRepository(context: Context) {
             reason: Int
         ) {
             _queueIndex = controller?.currentMediaItemIndex ?: 0
-            resetCrossfadeState()
+            // Only reset if transition was NOT triggered by our crossfade ramp
+            if (!crossfadeTriggered) resetCrossfadeState()
             pushState()
         }
         override fun onShuffleModeEnabledChanged(enabled: Boolean) = pushState()
-        override fun onRepeatModeChanged(repeatMode: Int) = pushState()
-        override fun onPlaybackStateChanged(state: Int) = pushState()
+        override fun onRepeatModeChanged(repeatMode: Int)           = pushState()
+        override fun onPlaybackStateChanged(state: Int)             = pushState()
     }
 
     private fun startPositionTicker() {
@@ -219,7 +281,8 @@ class PlayerRepository(context: Context) {
                 val c = controller
                 if (c?.isPlaying == true) {
                     val pos = c.currentPosition
-                    val dur = _queue.getOrNull(_queueIndex)?.durationMs ?: c.duration.takeIf { it > 0 } ?: 0L
+                    val dur = _queue.getOrNull(_queueIndex)?.durationMs
+                        ?: c.duration.takeIf { it > 0 } ?: 0L
                     checkCrossfadeTiming(pos, dur)
                     pushState()
                 }
