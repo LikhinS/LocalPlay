@@ -17,6 +17,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val playerState: StateFlow<PlayerState> = repository.state
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerState())
 
+    val crossfadeConfig: StateFlow<CrossfadeConfig> = repository.crossfadeConfig
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CrossfadeConfig())
+
     init { repository.connect() }
 
     override fun onCleared() {
@@ -35,4 +38,5 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setRepeatMode(mode: RepeatMode) = repository.setRepeatMode(mode)
     fun playNext(track: TrackEntity)    = repository.playNext(track)
     fun addToQueue(track: TrackEntity)  = repository.addToQueue(track)
+    fun setCrossfadeDuration(ms: Long)  = repository.setCrossfadeDuration(ms)
 }
