@@ -47,7 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.localplay.app.core.player.PlayerViewModel
@@ -69,16 +68,8 @@ fun NowPlayingScreen(
     val dismissThreshold = 120f
     val dragFraction = (dragOffsetY / dismissThreshold).coerceIn(0f, 1f)
 
-    val artScale by animateFloatAsState(
-        targetValue   = 1f - dragFraction * 0.08f,
-        animationSpec = tween(0),
-        label         = "artScale"
-    )
-    val screenAlpha by animateFloatAsState(
-        targetValue   = 1f - dragFraction * 0.4f,
-        animationSpec = tween(0),
-        label         = "screenAlpha"
-    )
+    val artScale    by animateFloatAsState(1f - dragFraction * 0.08f, tween(0), label = "scale")
+    val screenAlpha by animateFloatAsState(1f - dragFraction * 0.4f,  tween(0), label = "alpha")
 
     var showQueue by remember { mutableStateOf(false) }
 
@@ -88,10 +79,7 @@ fun NowPlayingScreen(
             .alpha(screenAlpha)
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
-                    onDragEnd = {
-                        if (dragOffsetY > dismissThreshold) onDismiss()
-                        dragOffsetY = 0f
-                    },
+                    onDragEnd    = { if (dragOffsetY > dismissThreshold) onDismiss(); dragOffsetY = 0f },
                     onDragCancel = { dragOffsetY = 0f },
                     onVerticalDrag = { _, delta ->
                         if (delta > 0) dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
@@ -101,23 +89,25 @@ fun NowPlayingScreen(
     ) {
         Column(
             modifier            = Modifier.fillMaxSize().padding(horizontal = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.Start      // everything left-aligned
         ) {
             Spacer(Modifier.height(12.dp))
 
-            // Drag handle
-            Box(
-                Modifier
-                    .width(36.dp).height(4.dp)
-                    .background(
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                        RoundedCornerShape(2.dp)
-                    )
-            )
+            // Drag handle — centred by its own Row
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Box(
+                    Modifier
+                        .width(36.dp).height(4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            RoundedCornerShape(2.dp)
+                        )
+                )
+            }
 
             Spacer(Modifier.height(12.dp))
 
-            // Header
+            // Header row
             Row(
                 modifier              = Modifier.fillMaxWidth(),
                 verticalAlignment     = Alignment.CenterVertically,
@@ -147,29 +137,25 @@ fun NowPlayingScreen(
                 modifier   = Modifier.fillMaxWidth().aspectRatio(1f).scale(artScale)
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // Title — marquee scrolls if too long
+            // Title — left-aligned, marquee if too long
             MarqueeText(
                 text  = track?.title ?: "Not playing",
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    textAlign = TextAlign.Center
-                ),
-                modifier = Modifier.fillMaxWidth()
+                style = MaterialTheme.typography.headlineSmall
             )
 
             Spacer(Modifier.height(4.dp))
 
-            // Artist — marquee scrolls if too long
+            // Artist — left-aligned, primary colour, marquee if too long
             MarqueeText(
                 text  = track?.artist ?: "",
                 style = MaterialTheme.typography.bodyMedium.copy(
                     color = MaterialTheme.colorScheme.primary
-                ),
-                modifier = Modifier.fillMaxWidth()
+                )
             )
 
-            // Format badge — one at a time, crossfades between states
+            // Format badge (one at a time — AnimatedContent crossfade)
             if (track != null) {
                 Spacer(Modifier.height(8.dp))
                 FormatBadgeRow(
@@ -193,16 +179,12 @@ fun NowPlayingScreen(
                     modifier              = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        formatDuration(state.positionMs),
+                    Text(formatDuration(state.positionMs),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        formatDuration(state.durationMs),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(formatDuration(state.durationMs),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -215,11 +197,9 @@ fun NowPlayingScreen(
                 verticalAlignment     = Alignment.CenterVertically
             ) {
                 IconButton(onClick = { playerViewModel.setShuffleEnabled(!state.shuffleEnabled) }) {
-                    Icon(
-                        Icons.Filled.Shuffle, "Shuffle",
+                    Icon(Icons.Filled.Shuffle, "Shuffle",
                         tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                               else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconButton(onClick = { playerViewModel.skipToPrevious() }) {
                     Icon(Icons.Filled.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
@@ -243,13 +223,11 @@ fun NowPlayingScreen(
                     Icon(Icons.Filled.SkipNext, "Next", modifier = Modifier.size(36.dp))
                 }
                 IconButton(onClick = {
-                    playerViewModel.setRepeatMode(
-                        when (state.repeatMode) {
-                            RepeatMode.OFF -> RepeatMode.ALL
-                            RepeatMode.ALL -> RepeatMode.ONE
-                            RepeatMode.ONE -> RepeatMode.OFF
-                        }
-                    )
+                    playerViewModel.setRepeatMode(when (state.repeatMode) {
+                        RepeatMode.OFF -> RepeatMode.ALL
+                        RepeatMode.ALL -> RepeatMode.ONE
+                        RepeatMode.ONE -> RepeatMode.OFF
+                    })
                 }) {
                     Icon(
                         if (state.repeatMode == RepeatMode.ONE) Icons.Filled.RepeatOne
