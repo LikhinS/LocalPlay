@@ -55,6 +55,7 @@ import com.localplay.app.ui.components.AlbumArt
 import com.localplay.app.ui.components.FormatBadgeRow
 import com.localplay.app.ui.components.MarqueeText
 import com.localplay.app.ui.components.formatDuration
+import com.localplay.app.ui.gradient.ArtworkGradientBackground
 
 @Composable
 fun NowPlayingScreen(
@@ -73,180 +74,223 @@ fun NowPlayingScreen(
 
     var showQueue by remember { mutableStateOf(false) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .alpha(screenAlpha)
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragEnd    = { if (dragOffsetY > dismissThreshold) onDismiss(); dragOffsetY = 0f },
-                    onDragCancel = { dragOffsetY = 0f },
-                    onVerticalDrag = { _, delta ->
-                        if (delta > 0) dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
-                    }
-                )
-            }
-    ) {
-        Column(
-            modifier            = Modifier.fillMaxSize().padding(horizontal = 28.dp),
-            horizontalAlignment = Alignment.Start      // everything left-aligned
+    // Gradient wraps the entire screen — album art drives the colors
+    ArtworkGradientBackground(albumId = track?.albumId) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(screenAlpha)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd    = {
+                            if (dragOffsetY > dismissThreshold) onDismiss()
+                            dragOffsetY = 0f
+                        },
+                        onDragCancel = { dragOffsetY = 0f },
+                        onVerticalDrag = { _, delta ->
+                            if (delta > 0) dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
+                        }
+                    )
+                }
         ) {
-            Spacer(Modifier.height(12.dp))
-
-            // Drag handle — centred by its own Row
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                Box(
-                    Modifier
-                        .width(36.dp).height(4.dp)
-                        .background(
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                            RoundedCornerShape(2.dp)
-                        )
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // Header row
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Column(
+                modifier            = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 28.dp),
+                horizontalAlignment = Alignment.Start
             ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.KeyboardArrowDown, "Dismiss", modifier = Modifier.size(28.dp))
+                Spacer(Modifier.height(12.dp))
+
+                // Drag handle — centred
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Box(
+                        Modifier
+                            .width(36.dp).height(4.dp)
+                            .background(
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                RoundedCornerShape(2.dp)
+                            )
+                    )
                 }
-                Text(
-                    "Now Playing",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                IconButton(onClick = { showQueue = true }) {
-                    Icon(Icons.Filled.QueueMusic, "Queue", modifier = Modifier.size(24.dp))
-                }
-            }
 
-            Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(12.dp))
 
-            // Album art
-            AlbumArt(
-                albumId    = track?.albumId,
-                sizeDp     = 300.dp,
-                cornerDp   = 12.dp,
-                showShadow = true,
-                modifier   = Modifier.fillMaxWidth().aspectRatio(1f).scale(artScale)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            // Title — left-aligned, marquee if too long
-            MarqueeText(
-                text  = track?.title ?: "Not playing",
-                style = MaterialTheme.typography.headlineSmall
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            // Artist — left-aligned, primary colour, marquee if too long
-            MarqueeText(
-                text  = track?.artist ?: "",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.primary
-                )
-            )
-
-            // Format badge (one at a time — AnimatedContent crossfade)
-            if (track != null) {
-                Spacer(Modifier.height(8.dp))
-                FormatBadgeRow(
-                    isLossless = track.isLossless,
-                    isHiRes    = track.sampleRateHz >= 48_000 && track.bitDepth >= 24,
-                    isAtmos    = track.isAtmos,
-                    isMixing   = state.isCrossfading
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // Scrubber
-            if (state.durationMs > 0) {
-                Slider(
-                    value         = state.progress,
-                    onValueChange = { playerViewModel.seekTo((it * state.durationMs).toLong()) },
-                    modifier      = Modifier.fillMaxWidth()
-                )
+                // Header row
                 Row(
                     modifier              = Modifier.fillMaxWidth(),
+                    verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatDuration(state.positionMs),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(formatDuration(state.durationMs),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // Transport controls
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { playerViewModel.setShuffleEnabled(!state.shuffleEnabled) }) {
-                    Icon(Icons.Filled.Shuffle, "Shuffle",
-                        tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = { playerViewModel.skipToPrevious() }) {
-                    Icon(Icons.Filled.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
-                }
-                FilledIconButton(
-                    onClick  = { playerViewModel.playOrPause() },
-                    modifier = Modifier.size(64.dp),
-                    shape    = CircleShape,
-                    colors   = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.onSurface,
-                        contentColor   = MaterialTheme.colorScheme.surface
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown, "Dismiss",
+                            modifier = Modifier.size(28.dp),
+                            tint     = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        "Now Playing",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
+                    IconButton(onClick = { showQueue = true }) {
+                        Icon(
+                            Icons.Filled.QueueMusic, "Queue",
+                            modifier = Modifier.size(24.dp),
+                            tint     = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // Album art
+                AlbumArt(
+                    albumId    = track?.albumId,
+                    sizeDp     = 300.dp,
+                    cornerDp   = 12.dp,
+                    showShadow = true,
+                    modifier   = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .scale(artScale)
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                // Title — left-aligned, marquee if too long
+                MarqueeText(
+                    text  = track?.title ?: "Not playing",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+
+                Spacer(Modifier.height(4.dp))
+
+                // Artist — left-aligned, accent colour
+                MarqueeText(
+                    text  = track?.artist ?: "",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                    )
+                )
+
+                // Format badge
+                if (track != null) {
+                    Spacer(Modifier.height(8.dp))
+                    FormatBadgeRow(
+                        isLossless = track.isLossless,
+                        isHiRes    = track.sampleRateHz >= 48_000 && track.bitDepth >= 24,
+                        isAtmos    = track.isAtmos,
+                        isMixing   = state.isCrossfading
+                    )
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // Scrubber
+                if (state.durationMs > 0) {
+                    Slider(
+                        value         = state.progress,
+                        onValueChange = { playerViewModel.seekTo((it * state.durationMs).toLong()) },
+                        modifier      = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            formatDuration(state.positionMs),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            formatDuration(state.durationMs),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // Transport controls
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment     = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        if (state.isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(36.dp)
-                    )
+                    IconButton(onClick = { playerViewModel.setShuffleEnabled(!state.shuffleEnabled) }) {
+                        Icon(
+                            Icons.Filled.Shuffle, "Shuffle",
+                            tint = if (state.shuffleEnabled)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                    IconButton(onClick = { playerViewModel.skipToPrevious() }) {
+                        Icon(
+                            Icons.Filled.SkipPrevious, "Previous",
+                            modifier = Modifier.size(36.dp),
+                            tint     = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    FilledIconButton(
+                        onClick  = { playerViewModel.playOrPause() },
+                        modifier = Modifier.size(64.dp),
+                        shape    = CircleShape,
+                        colors   = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.onSurface,
+                            contentColor   = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Icon(
+                            if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            if (state.isPlaying) "Pause" else "Play",
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                    IconButton(onClick = { playerViewModel.skipToNext() }) {
+                        Icon(
+                            Icons.Filled.SkipNext, "Next",
+                            modifier = Modifier.size(36.dp),
+                            tint     = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    IconButton(onClick = {
+                        playerViewModel.setRepeatMode(
+                            when (state.repeatMode) {
+                                RepeatMode.OFF -> RepeatMode.ALL
+                                RepeatMode.ALL -> RepeatMode.ONE
+                                RepeatMode.ONE -> RepeatMode.OFF
+                            }
+                        )
+                    }) {
+                        Icon(
+                            if (state.repeatMode == RepeatMode.ONE)
+                                Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                            "Repeat",
+                            tint = if (state.repeatMode != RepeatMode.OFF)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
                 }
-                IconButton(onClick = { playerViewModel.skipToNext() }) {
-                    Icon(Icons.Filled.SkipNext, "Next", modifier = Modifier.size(36.dp))
-                }
-                IconButton(onClick = {
-                    playerViewModel.setRepeatMode(when (state.repeatMode) {
-                        RepeatMode.OFF -> RepeatMode.ALL
-                        RepeatMode.ALL -> RepeatMode.ONE
-                        RepeatMode.ONE -> RepeatMode.OFF
-                    })
-                }) {
-                    Icon(
-                        if (state.repeatMode == RepeatMode.ONE) Icons.Filled.RepeatOne
-                        else Icons.Filled.Repeat,
-                        "Repeat",
-                        tint = if (state.repeatMode != RepeatMode.OFF)
-                            MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+
+                Spacer(Modifier.height(16.dp))
+                VolumeSlider()
+                Spacer(Modifier.height(24.dp))
             }
 
-            Spacer(Modifier.height(16.dp))
-            VolumeSlider()
-            Spacer(Modifier.height(24.dp))
-        }
-
-        if (showQueue) {
-            QueueSheet(playerViewModel = playerViewModel, onDismiss = { showQueue = false })
+            if (showQueue) {
+                QueueSheet(
+                    playerViewModel = playerViewModel,
+                    onDismiss       = { showQueue = false }
+                )
+            }
         }
     }
 }
