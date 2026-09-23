@@ -2,9 +2,6 @@ package com.localplay.app.core.player
 
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.os.IBinder
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -42,33 +39,17 @@ class PlayerRepository(context: Context) {
     private var positionTickJob: Job? = null
     private var pendingCommand: (() -> Unit)? = null
 
-    // Direct service reference for volume control
-    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
-
-    private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            if (binder is LocalPlaybackService.LocalBinder) {
-                exoPlayer = binder.getPlayer()
-            }
-        }
-        override fun onServiceDisconnected(name: ComponentName) {
-            exoPlayer = null
-        }
-    }
-
-    // Crossfade runtime
+    // Crossfade runtime state
     private var crossfadeRampJob: Job? = null
     private var isCrossfading      = false
     private var crossfadeTriggered = false
 
+    // Convenience accessor — null-safe, no binding required
+    private val exoPlayer get() = LocalPlaybackService.instance
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     fun connect() {
-        // 1. Bind for direct ExoPlayer volume access
-        val serviceIntent = Intent(appContext, LocalPlaybackService::class.java)
-        appContext.bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
-
-        // 2. Connect MediaController for transport commands
         val token = SessionToken(
             appContext,
             ComponentName(appContext, LocalPlaybackService::class.java)
@@ -93,8 +74,6 @@ class PlayerRepository(context: Context) {
         controller?.removeListener(playerListener)
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null
-        try { appContext.unbindService(serviceConnection) } catch (_: Exception) {}
-        exoPlayer = null
     }
 
     // ── Crossfade config ──────────────────────────────────────────────────
@@ -119,26 +98,37 @@ class PlayerRepository(context: Context) {
     }
 
     fun playOrPause() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
-    fun seekTo(ms: Long)   { resetCrossfadeState(); controller?.seekTo(ms) }
-    fun skipToNext()       { resetCrossfadeState(); controller?.seekToNextMediaItem() }
-    fun skipToPrevious()   {
+
+    fun seekTo(ms: Long) { resetCrossfadeState(); controller?.seekTo(ms) }
+
+    fun skipToNext() { resetCrossfadeState(); controller?.seekToNextMediaItem() }
+
+    fun skipToPrevious() {
         resetCrossfadeState()
-        controller?.let { if (it.currentPosition > 3_000L) it.seekTo(0L) else it.seekToPreviousMediaItem() }
+        controller?.let {
+            if (it.currentPosition > 3_000L) it.seekTo(0L)
+            else it.seekToPreviousMediaItem()
+        }
     }
+
     fun setShuffleEnabled(on: Boolean) { controller?.shuffleModeEnabled = on; pushState() }
+
     fun setRepeatMode(mode: RepeatMode) {
         controller?.repeatMode = when (mode) {
             RepeatMode.OFF -> Player.REPEAT_MODE_OFF
             RepeatMode.ALL -> Player.REPEAT_MODE_ALL
             RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-        }; pushState()
+        }
+        pushState()
     }
+
     fun playNext(track: TrackEntity) {
         val c = controller ?: return
         val at = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
         c.addMediaItem(at, LocalPlaybackService.mediaItemFrom(track))
         _queue.add(at.coerceAtMost(_queue.size), track); pushState()
     }
+
     fun addToQueue(track: TrackEntity) {
         controller?.addMediaItem(LocalPlaybackService.mediaItemFrom(track))
         _queue.add(track); pushState()
@@ -154,11 +144,9 @@ class PlayerRepository(context: Context) {
         val leadWindowStart = config.crossfadeDurationMs + config.mixingLabelLeadMs
 
         when {
-            // Lead window: show Mixing badge only
             timeRemaining in config.crossfadeDurationMs..leadWindowStart -> {
                 if (!isCrossfading) { isCrossfading = true; pushState() }
             }
-            // Fade window: trigger volume ramp once
             timeRemaining in 1L until config.crossfadeDurationMs -> {
                 if (!isCrossfading) { isCrossfading = true; pushState() }
                 if (!crossfadeTriggered) {
@@ -166,7 +154,6 @@ class PlayerRepository(context: Context) {
                     triggerVolumeCrossfade(config.crossfadeDurationMs)
                 }
             }
-            // Outside window
             else -> {
                 if (isCrossfading) { isCrossfading = false; pushState() }
             }
@@ -174,18 +161,13 @@ class PlayerRepository(context: Context) {
     }
 
     /**
-     * Volume ramp crossfade using the real ExoPlayer instance (obtained
-     * via service binding — MediaController doesn't expose volume).
-     *
-     * Ramp out current track: 1.0 → 0.0 over [fadeDurationMs]
-     * Skip to next track while silent, then ramp in: 0.0 → 1.0
-     * Steps every 50 ms = smooth 20 fps volume curve, lightweight on Exynos 850.
+     * Volume-ramp crossfade using ExoPlayer.instance (companion singleton).
+     * Ramps 1.0→0.0, advances track, then ramps 0.0→1.0 at 50ms steps.
      */
     private fun triggerVolumeCrossfade(fadeDurationMs: Long) {
         crossfadeRampJob?.cancel()
         crossfadeRampJob = scope.launch {
             val player = exoPlayer ?: run {
-                // Service not yet bound — fall back to instant skip
                 controller?.seekToNextMediaItem()
                 resetCrossfadeState()
                 return@launch
@@ -193,7 +175,7 @@ class PlayerRepository(context: Context) {
             val steps     = (fadeDurationMs / 50L).coerceAtLeast(2L)
             val stepDelay = fadeDurationMs / steps
 
-            // Fade out
+            // Fade out current track
             for (i in 0..steps) {
                 player.volume = 1f - (i.toFloat() / steps)
                 delay(stepDelay)
@@ -209,17 +191,16 @@ class PlayerRepository(context: Context) {
                     .coerceIn(0, _queue.lastIndex)
             }
 
-            // Small gap so next track buffers before we ramp up
+            // Brief buffer gap before fade-in
             delay(120L)
 
-            // Fade in
+            // Fade in next track
             for (i in 0..steps) {
                 player.volume = i.toFloat() / steps
                 delay(stepDelay)
             }
             player.volume = 1f
 
-            // Done
             isCrossfading      = false
             crossfadeTriggered = false
             pushState()
@@ -238,7 +219,9 @@ class PlayerRepository(context: Context) {
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) = pushState()
-        override fun onMediaItemTransition(item: androidx.media3.common.MediaItem?, reason: Int) {
+        override fun onMediaItemTransition(
+            item: androidx.media3.common.MediaItem?, reason: Int
+        ) {
             _queueIndex = controller?.currentMediaItemIndex ?: 0
             if (!crossfadeTriggered) resetCrossfadeState()
             pushState()

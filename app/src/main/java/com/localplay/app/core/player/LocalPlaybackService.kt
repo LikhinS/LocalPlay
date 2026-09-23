@@ -1,11 +1,8 @@
 package com.localplay.app.core.player
 
-import android.app.Service
 import android.content.ContentUris
 import android.content.Intent
-import android.os.Binder
 import android.os.Build
-import android.os.IBinder
 import android.provider.MediaStore
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -19,25 +16,22 @@ import com.localplay.app.core.database.entity.TrackEntity
 /**
  * Foreground service owning the ExoPlayer instance.
  *
- * Exposes a [LocalBinder] so PlayerRepository can bind directly and
- * get the real ExoPlayer for volume control (MediaController is a
- * client-side proxy and doesn't expose volume — binding is required).
+ * We expose the live ExoPlayer via a companion-object singleton so
+ * PlayerRepository can read/write player.volume for the volume-ramp
+ * crossfade without needing a service binding.
+ *
+ * MediaSessionService does not expose onBind() for override — that
+ * is why the previous LocalBinder approach caused a compile error.
+ * The companion singleton is the correct pattern for this use case.
  */
 class LocalPlaybackService : MediaSessionService() {
 
-    // Direct binder so PlayerRepository can access player.volume
-    inner class LocalBinder : Binder() {
-        fun getPlayer(): ExoPlayer = player
-    }
-
-    private val binder = LocalBinder()
-    lateinit var player: ExoPlayer
-        private set
     private lateinit var mediaSession: MediaSession
 
     override fun onCreate() {
         super.onCreate()
-        player = ExoPlayer.Builder(this)
+
+        val player = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -47,31 +41,35 @@ class LocalPlaybackService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+
+        // Publish the instance so PlayerRepository can access it
+        instance = player
+
         mediaSession = MediaSession.Builder(this, player).build()
     }
 
-    // Return our LocalBinder for direct service binding
-    override fun onBind(intent: Intent): IBinder {
-        // MediaSessionService.onBind handles the MediaSession intent;
-        // for any other intent (our direct bind) return the LocalBinder.
-        val sessionBinder = super.onBind(intent)
-        return if (sessionBinder != null) sessionBinder else binder
-    }
-
-    // Called by MediaSessionService for media session connections
     override fun onGetSession(info: MediaSession.ControllerInfo) = mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (!player.isPlaying) stopSelf()
+        if (instance?.isPlaying != true) stopSelf()
     }
 
     override fun onDestroy() {
         mediaSession.release()
-        player.release()
+        instance?.release()
+        instance = null
         super.onDestroy()
     }
 
     companion object {
+        /**
+         * Live ExoPlayer instance. Non-null while the service is running,
+         * null before onCreate and after onDestroy.
+         * PlayerRepository checks for null before every volume write.
+         */
+        var instance: ExoPlayer? = null
+            private set
+
         private val COLLECTION_URI
             get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                 MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)

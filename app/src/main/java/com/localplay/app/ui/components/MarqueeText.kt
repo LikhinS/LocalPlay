@@ -1,6 +1,5 @@
 package com.localplay.app.ui.components
 
-import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -21,29 +20,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 
 /**
- * Marquee text that scrolls right-to-left, one direction only:
+ * Marquee text — continuous left-to-right ticker belt:
  *
- *   1. Text sits at x=0 for [pauseAtStartMs]
- *   2. Scrolls left until fully out of view (linear, [scrollSpeedPxPerSec])
- *   3. Snaps invisibly back to x=0
- *   4. Pauses for [pauseAtStartMs] again, then repeats
+ *   1. Text sits at x=0 (left edge) for [pauseAtStartMs]
+ *   2. Scrolls LEFT continuously until the text has fully exited
+ *      the right side of the container (travelled containerWidth + textWidth px)
+ *   3. Instantly reappears entering from the right edge (snap)
+ *   4. Continues scrolling left until text reaches x=0 again
+ *   5. Pauses, then repeats
  *
- * When text fits in the container: static, single-line, ellipsis.
- * Applied to both title and artist in Now Playing and MiniPlayer.
+ * This gives the "ticker/conveyor belt" feel where text continuously
+ * flows left and wraps around from the right — same as Apple Music,
+ * Spotify, and most modern music players.
  *
- * SubcomposeLayout measures text width before the first frame so the
- * overflow decision is correct immediately — no onSizeChanged lag.
- *
- * Animation cost on Exynos 850: one Float per frame while scrolling,
- * zero cost while paused, zero cost when text fits.
+ * SubcomposeLayout measures text width before first frame — no lag.
+ * Static single-line ellipsis when text fits.
+ * Cost on Exynos 850: one Float update per frame while scrolling, zero otherwise.
  */
 @Composable
 fun MarqueeText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
-    pauseAtStartMs: Int = 1_500,        // pause at origin before and after scroll
-    scrollSpeedPxPerSec: Float = 55f    // px/sec — comfortable read speed
+    pauseAtStartMs: Int = 1_500,
+    scrollSpeedPxPerSec: Float = 55f
 ) {
     SubcomposeLayout(
         modifier = modifier
@@ -51,21 +51,22 @@ fun MarqueeText(
             .clipToBounds()
     ) { constraints ->
 
-        // Measure intrinsic text width (unconstrained)
-        val textPlaceable = subcompose("measure") {
+        // Measure intrinsic text width unconstrained
+        val measured = subcompose("measure") {
             Text(text = text, style = style, maxLines = 1, softWrap = false)
         }.first().measure(Constraints())
 
         val containerWidth = constraints.maxWidth
-        val textWidth      = textPlaceable.width
+        val textWidth      = measured.width
         val overflows      = textWidth > containerWidth
 
         val content = subcompose("content") {
             if (overflows) {
-                ScrollingText(
+                TickerText(
                     text               = text,
                     style              = style,
-                    travelPx           = textWidth.toFloat(),   // scroll until FULLY offscreen
+                    containerWidth     = containerWidth.toFloat(),
+                    textWidth          = textWidth.toFloat(),
                     pauseAtStartMs     = pauseAtStartMs,
                     scrollSpeedPxPerSec = scrollSpeedPxPerSec
                 )
@@ -91,45 +92,69 @@ fun MarqueeText(
 }
 
 @Composable
-private fun ScrollingText(
+private fun TickerText(
     text: String,
     style: TextStyle,
-    travelPx: Float,
+    containerWidth: Float,
+    textWidth: Float,
     pauseAtStartMs: Int,
     scrollSpeedPxPerSec: Float
 ) {
-    // How long the scroll itself takes at the given speed
-    val scrollMs = ((travelPx / scrollSpeedPxPerSec) * 1_000f)
-        .toInt().coerceAtLeast(800)
+    // Full travel distance:
+    // Text starts at x=0, scrolls left until it fully exits the container.
+    // That means it travels (containerWidth + textWidth) px total before
+    // it wraps. But we only need it to travel (containerWidth + textWidth)
+    // to go fully off the left edge, then we snap it back entering from
+    // the right at x = containerWidth, and scroll to x = 0.
+    //
+    // Simpler equivalent: treat the full cycle as one continuous leftward
+    // scroll of (containerWidth + textWidth + gap) px, where gap is the
+    // visual spacing between the end of one pass and the start of the next.
+    // We use containerWidth as the gap so the text is fully hidden before
+    // it reappears.
+    //
+    // keyframes:
+    //   0ms            : x = 0          (start, visible at left)
+    //   pauseAtStartMs : x = 0          (still paused)
+    //   pauseAtStartMs + scrollMs : x = -(containerWidth + textWidth)
+    //                                    (fully off left edge)
+    //   +1ms           : x = containerWidth  (snap: entering from right edge)
+    //   +resumeMs      : x = 0          (scrolled back to start position)
+    //   cycle end      : pause handled by gap between resumeMs and cyclMs
 
-    // Snap back is instant (1 ms) then pause again
-    val snapMs   = 1
-    val cycleMs  = pauseAtStartMs + scrollMs + snapMs + pauseAtStartMs
+    val exitDistance   = containerWidth + textWidth   // px to exit left edge
+    val returnDistance = containerWidth               // px from right edge back to 0
 
-    // keyframes: sit at 0 → scroll to -travelPx → snap back to 0 → sit at 0
+    val scrollOutMs  = ((exitDistance   / scrollSpeedPxPerSec) * 1_000f).toInt().coerceAtLeast(400)
+    val scrollBackMs = ((returnDistance / scrollSpeedPxPerSec) * 1_000f).toInt().coerceAtLeast(200)
+    val snapMs       = 1
+
+    val cycleMs = pauseAtStartMs + scrollOutMs + snapMs + scrollBackMs
+
     val transition = rememberInfiniteTransition(label = "marquee")
     val offset by transition.animateFloat(
         initialValue  = 0f,
-        targetValue   = 0f,   // keyframes override start/end; target = same so it loops
+        targetValue   = 0f,
         animationSpec = infiniteRepeatable(
             animation = keyframes {
                 durationMillis = cycleMs
 
-                // sit at start
-                0f at 0                              with LinearEasing
-                0f at pauseAtStartMs                 with LinearEasing
+                // pause at origin
+                0f at 0                with LinearEasing
+                0f at pauseAtStartMs   with LinearEasing
 
-                // scroll left to fully off-screen
-                -travelPx at (pauseAtStartMs + scrollMs) with LinearEasing
+                // scroll left until fully off-screen (left edge)
+                -exitDistance at (pauseAtStartMs + scrollOutMs) with LinearEasing
 
-                // snap back instantly
-                0f at (pauseAtStartMs + scrollMs + snapMs) with LinearEasing
+                // instant snap: reappear entering from right edge
+                containerWidth at (pauseAtStartMs + scrollOutMs + snapMs) with LinearEasing
 
-                // sit at start again until cycle end (implicit: 0f at cycleMs)
+                // scroll left back to origin at the same speed
+                0f at cycleMs with LinearEasing
             },
-            repeatMode = RepeatMode.Restart   // always left-to-right, never bounces
+            repeatMode = RepeatMode.Restart
         ),
-        label = "marquee_offset"
+        label = "ticker_offset"
     )
 
     Text(
