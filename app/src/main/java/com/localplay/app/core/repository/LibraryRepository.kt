@@ -15,11 +15,13 @@ class LibraryRepository(context: Context) {
         val existingMap = scanned.filter { it.id in knownIds }.mapNotNull { dao.getById(it.id) }.associateBy { it.id }
         dao.upsertAll(scanned.map { t -> existingMap[t.id]?.let { ex ->
             t.copy(sampleRateHz=ex.sampleRateHz, bitDepth=ex.bitDepth, channelCount=ex.channelCount,
-                   isLossless=ex.isLossless, isAtmos=ex.isAtmos, playCount=ex.playCount, lastPlayedAt=ex.lastPlayedAt)
+                isLossless=ex.isLossless, isAtmos=ex.isAtmos, playCount=ex.playCount, lastPlayedAt=ex.lastPlayedAt)
         } ?: t })
         dao.deleteStale(scanned.map { it.id })
     }
     fun observeAllTracks(): Flow<List<TrackEntity>>      = dao.observeAllByTitle()
+    fun observeAllByArtist(): Flow<List<TrackEntity>>    = dao.observeAllByArtist()
+    fun observeAllByAlbum(): Flow<List<TrackEntity>>     = dao.observeAllByAlbum()
     fun observeRecentlyAdded(): Flow<List<TrackEntity>>  = dao.observeRecentlyAdded()
     fun observeRecentlyPlayed(): Flow<List<TrackEntity>> = dao.observeRecentlyPlayed()
     suspend fun getTrackCount(): Int = dao.count()

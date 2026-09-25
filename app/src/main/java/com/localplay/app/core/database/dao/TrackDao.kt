@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.Flow
     @Query("DELETE FROM tracks WHERE id NOT IN (:currentIds)") suspend fun deleteStale(currentIds: List<Long>)
     @Query("UPDATE tracks SET playCount=playCount+1,lastPlayedAt=:nowMillis WHERE id=:trackId") suspend fun recordPlay(trackId: Long, nowMillis: Long)
     @Query("SELECT * FROM tracks ORDER BY title ASC") fun observeAllByTitle(): Flow<List<TrackEntity>>
+    @Query("SELECT * FROM tracks ORDER BY artist ASC, album ASC, trackNumber ASC") fun observeAllByArtist(): Flow<List<TrackEntity>>
+    @Query("SELECT * FROM tracks ORDER BY album ASC, trackNumber ASC") fun observeAllByAlbum(): Flow<List<TrackEntity>>
     @Query("SELECT * FROM tracks ORDER BY dateAdded DESC") fun observeRecentlyAdded(): Flow<List<TrackEntity>>
     @Query("SELECT * FROM tracks ORDER BY lastPlayedAt DESC LIMIT :limit") fun observeRecentlyPlayed(limit: Int = 20): Flow<List<TrackEntity>>
     @Query("SELECT COUNT(*) FROM tracks") suspend fun count(): Int

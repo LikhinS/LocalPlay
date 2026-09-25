@@ -1,35 +1,17 @@
 package com.localplay.app.core.player
-
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.localplay.app.core.database.entity.TrackEntity
-import com.localplay.app.core.player.model.PlayerState
-import com.localplay.app.core.player.model.RepeatMode
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
-
+import com.localplay.app.core.player.model.*
+import kotlinx.coroutines.flow.*
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
-
     val repository = PlayerRepository(app)
-
-    val playerState: StateFlow<PlayerState> = repository.state
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerState())
-
-    val crossfadeConfig: StateFlow<CrossfadeConfig> = repository.crossfadeConfig
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CrossfadeConfig())
-
+    val playerState: StateFlow<PlayerState> = repository.state.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerState())
+    val crossfadeConfig: StateFlow<CrossfadeConfig> = repository.crossfadeConfig.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CrossfadeConfig())
     init { repository.connect() }
-
-    override fun onCleared() {
-        repository.disconnect()
-        super.onCleared()
-    }
-
-    fun playQueue(tracks: List<TrackEntity>, startIndex: Int = 0) =
-        repository.playQueue(tracks, startIndex)
-
+    override fun onCleared() { repository.disconnect(); super.onCleared() }
+    fun playQueue(tracks: List<TrackEntity>, startIndex: Int = 0) = repository.playQueue(tracks, startIndex)
     fun playOrPause()                   = repository.playOrPause()
     fun seekTo(ms: Long)                = repository.seekTo(ms)
     fun skipToNext()                    = repository.skipToNext()
